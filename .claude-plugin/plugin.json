@@ -1,0 +1,9 @@
+{
+  "name": "prompt-efficiency-analyzer",
+  "version": "0.1.0",
+  "description": "Analyzes user prompts for token inefficiency and warns when a prompt is likely to cost more tokens than necessary.",
+  "author": {
+    "name": "RBDurgin",
+    "email": "RBDurgin@gmail.com"
+  }
+}

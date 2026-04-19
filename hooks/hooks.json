@@ -1,0 +1,16 @@
+{
+  "description": "Intercepts user prompts and warns when they are likely to be token-inefficient",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/analyze_efficiency.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
