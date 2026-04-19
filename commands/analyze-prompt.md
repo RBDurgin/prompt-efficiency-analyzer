@@ -15,6 +15,6 @@ python3 -c "import json,sys; print(json.dumps({'session_id':'manual','prompt':sy
 
 If the script returns a JSON object with a `systemMessage` key, display the warning message clearly to the user.
 
-If there are no high-severity signals (empty output), tell the user: "✓ This prompt looks efficient — no high-severity issues detected."
+If there are no high-severity signals (empty output), tell the user: "This prompt looks efficient -- no high-severity issues detected."
 
 Also describe any medium or low signals if the user wants more detail — you can re-run the analysis by calling the script directly and parsing its full output.
