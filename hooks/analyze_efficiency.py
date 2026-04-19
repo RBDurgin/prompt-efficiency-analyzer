@@ -9,9 +9,11 @@ Non-blocking: always exits 0.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from typing import Optional
 
 from utils import strip_fence
 
@@ -48,7 +50,7 @@ Only include signals that are clearly present. Return an empty signals array if 
 """
 
 
-def analyze_efficiency(prompt_text: str) -> dict | None:
+def analyze_efficiency(prompt_text: str) -> Optional[dict]:
     """Call claude -p to analyze prompt efficiency. Returns parsed dict or None on failure."""
     analysis_prompt = f"{_ANALYSIS_SYSTEM_PROMPT}\n\nUser prompt to analyze:\n{prompt_text}"
 
@@ -74,11 +76,11 @@ def analyze_efficiency(prompt_text: str) -> dict | None:
 
         text = strip_fence(result.stdout.strip())
         return json.loads(text)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+    except Exception:
         return None
 
 
-def build_warning_message(analysis: dict) -> str | None:
+def build_warning_message(analysis: dict) -> Optional[str]:
     """Build a systemMessage string if any signal is high severity, else None."""
     high_signals = [s for s in analysis.get("signals", []) if s.get("severity") == "high"]
     if not high_signals:
@@ -109,7 +111,9 @@ def main():
     except (json.JSONDecodeError, EOFError):
         sys.exit(0)
 
-    session_id = input_data.get("session_id", "unknown")
+    raw_session_id = input_data.get("session_id", "unknown")
+    # Sanitize session_id to prevent path traversal when constructing log path
+    session_id = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.basename(raw_session_id)) or "unknown"
     prompt_text = input_data.get("prompt", "")
 
     if not prompt_text.strip():
