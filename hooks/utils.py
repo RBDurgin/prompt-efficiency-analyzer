@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Shared utilities for prompt-efficiency-analyzer hooks."""
 
-import os
-
-
 def strip_fence(text: str) -> str:
     """Strip markdown code fences from LLM output."""
     if not text.startswith("```"):

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Unit tests for prompt-efficiency-analyzer hooks."""
+import utils
+import analyze_efficiency as ae
 
-import importlib
 import io
 import json
 import os
@@ -12,10 +13,6 @@ from unittest.mock import MagicMock, patch
 # Ensure hooks/ is on sys.path so sibling imports resolve
 _HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
 sys.path.insert(0, os.path.abspath(_HOOKS_DIR))
-
-import utils
-import analyze_efficiency as ae
-
 
 class TestStripFence(unittest.TestCase):
     def test_no_fence_returned_unchanged(self):
