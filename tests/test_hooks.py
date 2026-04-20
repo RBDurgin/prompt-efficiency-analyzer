@@ -12,9 +12,8 @@ from unittest.mock import MagicMock, patch
 _HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
 sys.path.insert(0, os.path.abspath(_HOOKS_DIR))
 
-import utils
-import analyze_efficiency as ae
-
+import utils # noqa: E402
+import analyze_efficiency as ae # noqa: E402
 
 class TestStripFence(unittest.TestCase):
     def test_no_fence_returned_unchanged(self):
