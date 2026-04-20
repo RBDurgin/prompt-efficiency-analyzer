@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -12,8 +13,9 @@ from unittest.mock import MagicMock, patch
 _HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
 sys.path.insert(0, os.path.abspath(_HOOKS_DIR))
 
-import utils # noqa: E402
-import analyze_efficiency as ae # noqa: E402
+import utils  # noqa: E402
+import analyze_efficiency as ae  # noqa: E402
+
 
 class TestStripFence(unittest.TestCase):
     def test_no_fence_returned_unchanged(self):
@@ -117,7 +119,11 @@ class TestBuildWarningMessage(unittest.TestCase):
         self.assertIn("vague", msg)
 
 
-class TestAnalyzeEfficiency(unittest.TestCase):
+# ---------------------------------------------------------------------------
+# LLM backend (_analyze_with_llm)
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeWithLlm(unittest.TestCase):
     _GOOD_ANALYSIS = {
         "signals": [],
         "overall_efficiency": "good",
@@ -133,29 +139,29 @@ class TestAnalyzeEfficiency(unittest.TestCase):
     @patch("analyze_efficiency.subprocess.run")
     def test_returns_parsed_dict_on_success(self, mock_run):
         mock_run.return_value = self._mock_run(json.dumps(self._GOOD_ANALYSIS))
-        result = ae.analyze_efficiency("fix my code")
+        result = ae._analyze_with_llm("fix my code")
         self.assertEqual(result, self._GOOD_ANALYSIS)
 
     @patch("analyze_efficiency.subprocess.run")
     def test_returns_none_on_nonzero_exit(self, mock_run):
         mock_run.return_value = self._mock_run("", returncode=1)
-        self.assertIsNone(ae.analyze_efficiency("fix my code"))
+        self.assertIsNone(ae._analyze_with_llm("fix my code"))
 
     @patch("analyze_efficiency.subprocess.run")
     def test_returns_none_on_invalid_json(self, mock_run):
         mock_run.return_value = self._mock_run("not json at all")
-        self.assertIsNone(ae.analyze_efficiency("fix my code"))
+        self.assertIsNone(ae._analyze_with_llm("fix my code"))
 
     @patch("analyze_efficiency.subprocess.run")
     def test_strips_fence_before_parsing(self, mock_run):
         fenced = "```json\n" + json.dumps(self._GOOD_ANALYSIS) + "\n```"
         mock_run.return_value = self._mock_run(fenced)
-        result = ae.analyze_efficiency("fix my code")
+        result = ae._analyze_with_llm("fix my code")
         self.assertEqual(result, self._GOOD_ANALYSIS)
 
     @patch("analyze_efficiency.subprocess.run", side_effect=Exception("boom"))
     def test_returns_none_on_exception(self, _mock_run):
-        self.assertIsNone(ae.analyze_efficiency("fix my code"))
+        self.assertIsNone(ae._analyze_with_llm("fix my code"))
 
     @patch("analyze_efficiency.subprocess.run")
     def test_sets_sentinel_env_var(self, mock_run):
@@ -166,9 +172,134 @@ class TestAnalyzeEfficiency(unittest.TestCase):
             return self._mock_run(json.dumps(self._GOOD_ANALYSIS))
 
         mock_run.side_effect = capture
-        ae.analyze_efficiency("hello")
+        ae._analyze_with_llm("hello")
         self.assertEqual(captured_env.get(ae._SENTINEL_ENV), "1")
 
+
+# ---------------------------------------------------------------------------
+# Rules backend (_analyze_with_rules)
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeWithRules(unittest.TestCase):
+    def test_returns_dict_always(self):
+        result = ae._analyze_with_rules("look at my code and fix stuff")
+        self.assertIsInstance(result, dict)
+        self.assertIn("signals", result)
+        self.assertIn("overall_efficiency", result)
+        self.assertIn("token_risk", result)
+
+    def test_vague_prompt_has_signals(self):
+        result = ae._analyze_with_rules("look at my code and fix stuff")
+        self.assertTrue(len(result["signals"]) > 0)
+
+    def test_clean_prompt_has_no_signals(self):
+        result = ae._analyze_with_rules("Add a docstring to the parse_args function in cli.py")
+        self.assertEqual(result["signals"], [])
+        self.assertEqual(result["overall_efficiency"], "good")
+
+    def test_returns_safe_dict_on_internal_error(self):
+        with patch("analyze_efficiency.run_rules", side_effect=RuntimeError("boom")):
+            result = ae._analyze_with_rules("any prompt")
+        self.assertEqual(result["signals"], [])
+        self.assertEqual(result["token_risk"], "low")
+
+
+# ---------------------------------------------------------------------------
+# Dispatch (analyze_efficiency)
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeEfficiencyDispatch(unittest.TestCase):
+    @patch("analyze_efficiency._get_analyzer", return_value="llm")
+    @patch("analyze_efficiency._analyze_with_llm", return_value={"signals": [], "overall_efficiency": "good", "token_risk": "low"})
+    def test_dispatches_to_llm_when_configured(self, mock_llm, _get):
+        ae.analyze_efficiency("hello")
+        mock_llm.assert_called_once_with("hello")
+
+    @patch("analyze_efficiency._get_analyzer", return_value="rules")
+    @patch("analyze_efficiency._analyze_with_rules", return_value={"signals": [], "overall_efficiency": "good", "token_risk": "low"})
+    def test_dispatches_to_rules_when_configured(self, mock_rules, _get):
+        ae.analyze_efficiency("hello")
+        mock_rules.assert_called_once_with("hello")
+
+    @patch("analyze_efficiency._get_analyzer", return_value="rules")
+    def test_rules_path_never_returns_none(self, _get):
+        result = ae.analyze_efficiency("look at my code and fix stuff")
+        self.assertIsNotNone(result)
+
+    @patch("analyze_efficiency._get_analyzer", return_value="llm")
+    @patch("analyze_efficiency._analyze_with_llm", return_value=None)
+    def test_llm_path_can_return_none(self, _llm, _get):
+        self.assertIsNone(ae.analyze_efficiency("hello"))
+
+
+# ---------------------------------------------------------------------------
+# _get_analyzer
+# ---------------------------------------------------------------------------
+
+class TestGetAnalyzer(unittest.TestCase):
+    def _write_config(self, tmpdir, data):
+        path = os.path.join(tmpdir, "config.json")
+        with open(path, "w") as fh:
+            json.dump(data, fh)
+        return tmpdir
+
+    def test_env_var_llm_wins(self):
+        with patch.dict(os.environ, {ae._ANALYZER_ENV: "llm", "CLAUDE_PLUGIN_ROOT": ""}):
+            self.assertEqual(ae._get_analyzer(), "llm")
+
+    def test_env_var_rules_wins(self):
+        with patch.dict(os.environ, {ae._ANALYZER_ENV: "rules", "CLAUDE_PLUGIN_ROOT": ""}):
+            self.assertEqual(ae._get_analyzer(), "rules")
+
+    def test_env_var_case_insensitive(self):
+        with patch.dict(os.environ, {ae._ANALYZER_ENV: "LLM", "CLAUDE_PLUGIN_ROOT": ""}):
+            self.assertEqual(ae._get_analyzer(), "llm")
+
+    def test_invalid_env_falls_through_to_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_config(tmpdir, {"analyzer": "llm"})
+            with patch.dict(os.environ, {ae._ANALYZER_ENV: "garbage", "CLAUDE_PLUGIN_ROOT": tmpdir}):
+                self.assertEqual(ae._get_analyzer(), "llm")
+
+    def test_config_file_llm(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_config(tmpdir, {"analyzer": "llm"})
+            with patch.dict(os.environ, {ae._ANALYZER_ENV: "", "CLAUDE_PLUGIN_ROOT": tmpdir}):
+                self.assertEqual(ae._get_analyzer(), "llm")
+
+    def test_config_file_rules(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_config(tmpdir, {"analyzer": "rules"})
+            with patch.dict(os.environ, {ae._ANALYZER_ENV: "", "CLAUDE_PLUGIN_ROOT": tmpdir}):
+                self.assertEqual(ae._get_analyzer(), "rules")
+
+    def test_config_invalid_json_returns_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "config.json"), "w") as fh:
+                fh.write("not json")
+            with patch.dict(os.environ, {ae._ANALYZER_ENV: "", "CLAUDE_PLUGIN_ROOT": tmpdir}):
+                self.assertEqual(ae._get_analyzer(), "rules")
+
+    def test_config_unknown_value_returns_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_config(tmpdir, {"analyzer": "gpt"})
+            with patch.dict(os.environ, {ae._ANALYZER_ENV: "", "CLAUDE_PLUGIN_ROOT": tmpdir}):
+                self.assertEqual(ae._get_analyzer(), "rules")
+
+    def test_missing_config_file_returns_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {ae._ANALYZER_ENV: "", "CLAUDE_PLUGIN_ROOT": tmpdir}):
+                self.assertEqual(ae._get_analyzer(), "rules")
+
+    def test_no_plugin_root_returns_default(self):
+        env = {k: v for k, v in os.environ.items() if k not in (ae._ANALYZER_ENV, "CLAUDE_PLUGIN_ROOT")}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(ae._get_analyzer(), "rules")
+
+
+# ---------------------------------------------------------------------------
+# main()
+# ---------------------------------------------------------------------------
 
 class TestMain(unittest.TestCase):
     def _run_main(self, stdin_data: dict, env_extra: dict | None = None):
