@@ -6,14 +6,16 @@ import json
 import os
 import sys
 import unittest
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 # Ensure hooks/ is on sys.path so sibling imports resolve
 _HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
 sys.path.insert(0, os.path.abspath(_HOOKS_DIR))
 
-import utils # noqa: E402
-import analyze_efficiency as ae # noqa: E402
+import analyze_efficiency as ae
+import utils
+
 
 class TestStripFence(unittest.TestCase):
     def test_no_fence_returned_unchanged(self):
@@ -118,7 +120,7 @@ class TestBuildWarningMessage(unittest.TestCase):
 
 
 class TestAnalyzeEfficiency(unittest.TestCase):
-    _GOOD_ANALYSIS = {
+    _GOOD_ANALYSIS: ClassVar[dict] = {
         "signals": [],
         "overall_efficiency": "good",
         "token_risk": "low",
@@ -176,16 +178,18 @@ class TestMain(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != ae._SENTINEL_ENV}
         if env_extra:
             env.update(env_extra)
-        with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin_json.encode()))):
-            with patch.dict(os.environ, env, clear=True):
-                with patch("builtins.print") as mock_print:
-                    with patch("analyze_efficiency.os.makedirs"):
-                        with patch("builtins.open", unittest.mock.mock_open()):
-                            try:
-                                ae.main()
-                            except SystemExit:
-                                pass
-                            return mock_print
+        with (
+            patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin_json.encode()))),
+            patch.dict(os.environ, env, clear=True),
+            patch("builtins.print") as mock_print,
+            patch("analyze_efficiency.os.makedirs"),
+            patch("builtins.open", unittest.mock.mock_open()),
+        ):
+            try:
+                ae.main()
+            except SystemExit:
+                pass
+            return mock_print
 
     @patch.dict(os.environ, {"CLAUDE_EFFICIENCY_ANALYZING": "1"})
     def test_sentinel_env_exits_immediately(self):
@@ -194,17 +198,22 @@ class TestMain(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 0)
 
     def test_invalid_json_stdin_exits_cleanly(self):
-        with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(b"not json"))):
-            with self.assertRaises(SystemExit) as ctx:
-                ae.main()
+        with (
+            patch("sys.stdin", io.TextIOWrapper(io.BytesIO(b"not json"))),
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            ae.main()
         self.assertEqual(ctx.exception.code, 0)
 
     def test_empty_prompt_exits_without_analysis(self):
-        with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(json.dumps({"session_id": "s", "prompt": "  "}).encode()))):
-            with patch("analyze_efficiency.analyze_efficiency") as mock_analyze:
-                with self.assertRaises(SystemExit):
-                    ae.main()
-                mock_analyze.assert_not_called()
+        stdin = json.dumps({"session_id": "s", "prompt": "  "}).encode()
+        with (
+            patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))),
+            patch("analyze_efficiency.analyze_efficiency") as mock_analyze,
+            self.assertRaises(SystemExit),
+        ):
+            ae.main()
+        mock_analyze.assert_not_called()
 
     @patch("analyze_efficiency.analyze_efficiency")
     @patch("analyze_efficiency.os.makedirs")
@@ -215,15 +224,17 @@ class TestMain(unittest.TestCase):
             "token_risk": "high",
         }
         stdin = json.dumps({"session_id": "abc123", "prompt": "fix my stuff"}).encode()
-        with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))):
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop(ae._SENTINEL_ENV, None)
-                with patch("builtins.print") as mock_print:
-                    with patch("builtins.open", unittest.mock.mock_open()):
-                        try:
-                            ae.main()
-                        except SystemExit:
-                            pass
+        with (
+            patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))),
+            patch.dict(os.environ, {}, clear=False),
+            patch("builtins.print") as mock_print,
+            patch("builtins.open", unittest.mock.mock_open()),
+        ):
+            os.environ.pop(ae._SENTINEL_ENV, None)
+            try:
+                ae.main()
+            except SystemExit:
+                pass
         mock_print.assert_called_once()
         output = json.loads(mock_print.call_args[0][0])
         self.assertIn("systemMessage", output)
@@ -238,30 +249,34 @@ class TestMain(unittest.TestCase):
             "token_risk": "low",
         }
         stdin = json.dumps({"session_id": "abc", "prompt": "please carefully fix the bug"}).encode()
-        with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))):
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop(ae._SENTINEL_ENV, None)
-                with patch("builtins.print") as mock_print:
-                    with patch("builtins.open", unittest.mock.mock_open()):
-                        try:
-                            ae.main()
-                        except SystemExit:
-                            pass
+        with (
+            patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))),
+            patch.dict(os.environ, {}, clear=False),
+            patch("builtins.print") as mock_print,
+            patch("builtins.open", unittest.mock.mock_open()),
+        ):
+            os.environ.pop(ae._SENTINEL_ENV, None)
+            try:
+                ae.main()
+            except SystemExit:
+                pass
         mock_print.assert_not_called()
 
     @patch("analyze_efficiency.analyze_efficiency", return_value=None)
     @patch("analyze_efficiency.os.makedirs")
     def test_none_analysis_prints_nothing(self, _mkdirs, _analyze):
         stdin = json.dumps({"session_id": "abc", "prompt": "hello"}).encode()
-        with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))):
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop(ae._SENTINEL_ENV, None)
-                with patch("builtins.print") as mock_print:
-                    with patch("builtins.open", unittest.mock.mock_open()):
-                        try:
-                            ae.main()
-                        except SystemExit:
-                            pass
+        with (
+            patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))),
+            patch.dict(os.environ, {}, clear=False),
+            patch("builtins.print") as mock_print,
+            patch("builtins.open", unittest.mock.mock_open()),
+        ):
+            os.environ.pop(ae._SENTINEL_ENV, None)
+            try:
+                ae.main()
+            except SystemExit:
+                pass
         mock_print.assert_not_called()
 
 
@@ -279,14 +294,16 @@ class TestSessionIdSanitization(unittest.TestCase):
             written_paths.append(path)
             return unittest.mock.mock_open()(path, mode)
 
-        with patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))):
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop(ae._SENTINEL_ENV, None)
-                with patch("builtins.open", side_effect=fake_open):
-                    try:
-                        ae.main()
-                    except SystemExit:
-                        pass
+        with (
+            patch("sys.stdin", io.TextIOWrapper(io.BytesIO(stdin))),
+            patch.dict(os.environ, {}, clear=False),
+            patch("builtins.open", side_effect=fake_open),
+        ):
+            os.environ.pop(ae._SENTINEL_ENV, None)
+            try:
+                ae.main()
+            except SystemExit:
+                pass
 
         for p in written_paths:
             self.assertNotIn("..", p)
