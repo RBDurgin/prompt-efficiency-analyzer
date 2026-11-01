@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """
 UserPromptSubmit hook for prompt-efficiency-analyzer plugin.
-Analyzes each user prompt for token inefficiency using Claude Haiku.
+Analyzes each user prompt for token inefficiency.
+Supports two analyzers, selectable via config or env var:
+  - "rules" (default): fast, deterministic regex-based analysis, no external dependencies
+  - "llm": calls Claude Haiku for nuanced analysis (requires claude CLI on PATH)
+
+Analyzer selection (highest priority first):
+  1. CLAUDE_EFFICIENCY_ANALYZER env var ("rules" or "llm")
+  2. "analyzer" field in ${CLAUDE_PLUGIN_ROOT}/config.json
+  3. Default: "rules"
+
 Emits a systemMessage warning only when at least one signal is high severity.
 Low/medium signals are logged to ~/.claude/efficiency-logs/<session_id>.jsonl.
 Non-blocking: always exits 0.
@@ -15,11 +24,13 @@ import sys
 from datetime import datetime, timezone
 from typing import Optional
 
+from rules import run_rules
 from utils import strip_fence
 
 
 LOG_DIR = os.path.expanduser("~/.claude/efficiency-logs")
 _SENTINEL_ENV = "CLAUDE_EFFICIENCY_ANALYZING"
+_ANALYZER_ENV = "CLAUDE_EFFICIENCY_ANALYZER"
 
 _ANALYSIS_SYSTEM_PROMPT = """\
 You are a prompt efficiency evaluator. Your job is to analyze a user prompt submitted to an AI coding assistant and identify patterns that will waste tokens.
@@ -50,10 +61,38 @@ Only include signals that are clearly present. Return an empty signals array if 
 """
 
 
-def analyze_efficiency(prompt_text: str) -> Optional[dict]:
-    """Call claude -p to analyze prompt efficiency. Returns parsed dict or None on failure."""
-    analysis_prompt = f"{_ANALYSIS_SYSTEM_PROMPT}\n\nUser prompt to analyze:\n{prompt_text}"
+def _get_analyzer() -> str:
+    """Return "llm" or "rules" based on env var, config file, or default."""
+    env_val = os.environ.get(_ANALYZER_ENV, "").strip().lower()
+    if env_val in ("llm", "rules"):
+        return env_val
 
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if plugin_root:
+        config_path = os.path.join(plugin_root, "config.json")
+        try:
+            with open(config_path) as fh:
+                cfg = json.load(fh)
+            val = str(cfg.get("analyzer", "")).strip().lower()
+            if val in ("llm", "rules"):
+                return val
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+
+    return "rules"
+
+
+def _analyze_with_rules(prompt_text: str) -> dict:
+    """Rule-based analysis. Always returns a dict."""
+    try:
+        return run_rules(prompt_text)
+    except Exception:
+        return {"signals": [], "overall_efficiency": "good", "token_risk": "low"}
+
+
+def _analyze_with_llm(prompt_text: str) -> Optional[dict]:
+    """Call claude -p (Haiku) for analysis. Returns parsed dict or None on failure."""
+    analysis_prompt = f"{_ANALYSIS_SYSTEM_PROMPT}\n\nUser prompt to analyze:\n{prompt_text}"
     env = {**os.environ, _SENTINEL_ENV: "1"}
     try:
         result = subprocess.run(
@@ -73,11 +112,17 @@ def analyze_efficiency(prompt_text: str) -> Optional[dict]:
         )
         if result.returncode != 0:
             return None
-
         text = strip_fence(result.stdout.strip())
         return json.loads(text)
     except Exception:
         return None
+
+
+def analyze_efficiency(prompt_text: str) -> Optional[dict]:
+    """Dispatch to the configured analyzer and return an analysis dict."""
+    if _get_analyzer() == "llm":
+        return _analyze_with_llm(prompt_text)
+    return _analyze_with_rules(prompt_text)
 
 
 def build_warning_message(analysis: dict) -> Optional[str]:
@@ -101,8 +146,8 @@ def build_warning_message(analysis: dict) -> Optional[str]:
 
 
 def main():
-    # Prevent infinite recursion: this hook calls `claude -p`, which itself fires
-    # UserPromptSubmit hooks. Bail immediately if we're already inside an analysis.
+    # When using the LLM analyzer, prevent infinite recursion: this hook calls
+    # `claude -p`, which itself fires UserPromptSubmit hooks. Bail if already inside.
     if os.environ.get(_SENTINEL_ENV):
         sys.exit(0)
 
