@@ -13,10 +13,8 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Optional
 
 from utils import strip_fence
-
 
 LOG_DIR = os.path.expanduser("~/.claude/efficiency-logs")
 _SENTINEL_ENV = "CLAUDE_EFFICIENCY_ANALYZING"
@@ -50,7 +48,7 @@ Only include signals that are clearly present. Return an empty signals array if 
 """
 
 
-def analyze_efficiency(prompt_text: str) -> Optional[dict]:
+def analyze_efficiency(prompt_text: str) -> dict | None:
     """Call claude -p to analyze prompt efficiency. Returns parsed dict or None on failure."""
     analysis_prompt = f"{_ANALYSIS_SYSTEM_PROMPT}\n\nUser prompt to analyze:\n{prompt_text}"
 
@@ -70,17 +68,18 @@ def analyze_efficiency(prompt_text: str) -> Optional[dict]:
             text=True,
             timeout=25,
             env=env,
+            check=False,
         )
         if result.returncode != 0:
             return None
 
         text = strip_fence(result.stdout.strip())
         return json.loads(text)
-    except Exception:
+    except Exception:  # noqa: BLE001 - hook must never fail the session
         return None
 
 
-def build_warning_message(analysis: dict) -> Optional[str]:
+def build_warning_message(analysis: dict) -> str | None:
     """Build a systemMessage string if any signal is high severity, else None."""
     high_signals = [s for s in analysis.get("signals", []) if s.get("severity") == "high"]
     if not high_signals:
@@ -125,7 +124,7 @@ def main():
     os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
     log_path = os.path.join(LOG_DIR, f"{session_id}.jsonl")
     log_entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),  # noqa: UP017 - datetime.UTC needs Python 3.11+
         "session_id": session_id,
         "prompt_length": len(prompt_text),
         "prompt_preview": prompt_text[:200],
@@ -134,7 +133,7 @@ def main():
     try:
         with open(log_path, "a", opener=lambda p, f: os.open(p, f, 0o600)) as fh:
             fh.write(json.dumps(log_entry) + "\n")
-    except IOError:
+    except OSError:
         pass
 
     # Only surface a warning to Claude when at least one signal is high severity
