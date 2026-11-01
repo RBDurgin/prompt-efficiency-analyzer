@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 
 from utils import strip_fence
 
-
 LOG_DIR = os.path.expanduser("~/.claude/efficiency-logs")
 _SENTINEL_ENV = "CLAUDE_EFFICIENCY_ANALYZING"
 
